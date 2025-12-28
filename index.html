@@ -1,0 +1,565 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Robert Belly Bounce</title>
+<style>
+  html, body { height:100%; margin:0; background:#111; }
+  .wrap { height:100%; display:flex; align-items:center; justify-content:center; }
+  canvas {
+    background: linear-gradient(#7bb7ff, #e9f6ff);
+    border-radius:16px;
+    box-shadow:0 12px 40px rgba(0,0,0,.35);
+  }
+  .hint {
+    position:fixed; bottom:14px; left:0; right:0;
+    text-align:center;
+    font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    color:#fff; opacity:.9;
+    text-shadow: 0 2px 10px rgba(0,0,0,.35);
+    user-select:none;
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <canvas id="game" width="420" height="640"></canvas>
+</div>
+<div class="hint">SPACE / CLICK = bounce 💨 • Avoid 🥃 • Collect 🚬 • Secret bonus if you hit the ceiling early 😉</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+
+  // ---------- Assets ----------
+  const robertImg = new Image();
+  robertImg.src = "robert.png";
+
+  const bottleImg = new Image();
+  bottleImg.src = "whiskey_bottle_sprite.png";
+
+  const fart = new Audio("fart.mp3");
+  fart.volume = 0.6;
+
+  // ---------- Physics (Flappy-like) ----------
+  const FLOOR_H = 60;
+  const GRAVITY = 0.55;
+  const FLAP_VY = -8.5;
+  const MAX_FALL = 12;
+
+  const ROBERT_RADIUS = 20;
+
+  // Visuals
+  const SPRITE_W = 120;
+  const SPRITE_H = 200;
+
+  // Bottles
+  const SCROLL_SPEED = 2.55;
+  const BOTTLE_W = 78;
+  const SPAWN_EVERY = 145;
+
+  // Variable gaps
+  const GAP_MIN = 180;
+  const GAP_MAX = 270;
+
+  // Cigarettes
+  const CIG_RADIUS = 18;
+  const CIG_POINTS = 5;
+  const CIG_SPAWN_CHANCE = 0.9;
+
+  // Bottle tiling look
+  const TILE_OVERLAP = 0.86;
+
+  // ---------- Easter Egg / Bonus ----------
+  const EGG_WINDOW_FRAMES = 180; // ~3 seconds at 60fps
+  const BONUS_POINTS = 50;
+
+  // ---------- State ----------
+  let state = "menu"; // "menu" | "play" | "bonus" | "gameover"
+  let score = 0;
+  let best = 0;
+  let frame = 0;
+
+  const robert = { x: 140, y: canvas.height * 0.4, vy: 0 };
+
+  // obstacles: { x, gapY, gapH, passed, flipTop }
+  const obstacles = [];
+  // cigs: { x, y, collected, spin }
+  const cigs = [];
+
+  // bonus state
+  let eggUsedThisRun = false;
+  let bonusPhase = "ready"; // "ready" | "pulled" | "drop"
+  let bonusTimer = 0;
+
+  // ---------- Helpers ----------
+  function rand(min, max) { return Math.random() * (max - min) + min; }
+
+  function startFreshRun() {
+    state = "play";
+    score = 0;
+    frame = 0;
+
+    robert.y = canvas.height * 0.4;
+    robert.vy = 0;
+
+    obstacles.length = 0;
+    cigs.length = 0;
+
+    eggUsedThisRun = false;
+    bonusPhase = "ready";
+    bonusTimer = 0;
+  }
+
+  function spawnBottlePair() {
+    const floorTop = canvas.height - FLOOR_H;
+    const margin = 70;
+
+    const gapH = rand(GAP_MIN, GAP_MAX);
+    const gapY = rand(margin, floorTop - gapH - margin);
+    const x = canvas.width + 40;
+
+    const flipTop = Math.random() < 0.5;
+    obstacles.push({ x, gapY, gapH, passed:false, flipTop });
+
+    if (Math.random() < CIG_SPAWN_CHANCE) {
+      const cy = gapY + gapH * 0.5 + rand(-gapH * 0.25, gapH * 0.25);
+      const cx = x + BOTTLE_W + 70;
+      cigs.push({ x: cx, y: cy, collected:false, spin: Math.random() * 6 });
+    }
+  }
+
+  function circleRect(cx,cy,r,rx,ry,rw,rh){
+    const px=Math.max(rx,Math.min(cx,rx+rw));
+    const py=Math.max(ry,Math.min(cy,ry+rh));
+    return (cx-px)**2+(cy-py)**2 <= r*r;
+  }
+
+  function circleCircle(x1,y1,r1,x2,y2,r2){
+    const dx=x1-x2, dy=y1-y2;
+    return dx*dx+dy*dy <= (r1+r2)*(r1+r2);
+  }
+
+  function endGame() {
+    state = "gameover";
+    best = Math.max(best, score);
+  }
+
+  function enterBonusMode() {
+    state = "bonus";
+    bonusPhase = "ready";
+    bonusTimer = 0;
+    eggUsedThisRun = true;
+
+    // park Robert visually for the bonus scene
+    robert.vy = 0;
+  }
+
+  function exitBonusModeDropBack() {
+    // Put him back into play with a little “drop”
+    state = "play";
+    robert.y = canvas.height * 0.30;
+    robert.vy = 2.0;
+  }
+
+  // ---------- Input ----------
+  function handleInput() {
+    // fart on every user interaction
+    try { fart.currentTime = 0; fart.play(); } catch {}
+
+    if (state === "menu") {
+      startFreshRun();
+      robert.vy = FLAP_VY;
+      return;
+    }
+
+    if (state === "gameover") {
+      startFreshRun();
+      robert.vy = FLAP_VY;
+      return;
+    }
+
+    if (state === "bonus") {
+      if (bonusPhase === "ready") {
+        bonusPhase = "pulled";
+        bonusTimer = 40; // small “spin” time
+      }
+      return;
+    }
+
+    // normal flap
+    if (state === "play") robert.vy = FLAP_VY;
+  }
+
+  window.addEventListener("keydown", e=>{
+    if (e.code === "Space") { e.preventDefault(); handleInput(); }
+  });
+  canvas.addEventListener("pointerdown", e=>{
+    e.preventDefault(); handleInput();
+  });
+
+  // ---------- Drawing helpers ----------
+  function roundRectPath(x, y, w, h, r) {
+    const rr = Math.min(r, w/2, h/2);
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rr);
+    ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr);
+    ctx.arcTo(x, y, x + w, y, rr);
+    ctx.closePath();
+  }
+
+  function drawCig(x, y, rot) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rot);
+
+    // glow
+    ctx.globalAlpha = 0.45;
+    ctx.beginPath();
+    ctx.arc(0, 0, 24, 0, Math.PI * 2);
+    ctx.fillStyle = "#ffffff";
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = "rgba(0,0,0,.55)";
+
+    const w = 44, h = 12;
+
+    // body
+    roundRectPath(-w/2, -h/2, w, h, 6);
+    ctx.fillStyle = "#f7f7f7";
+    ctx.fill();
+    ctx.stroke();
+
+    // filter
+    roundRectPath(w/2 - 14, -h/2, 14, h, 5);
+    ctx.fillStyle = "#d98b2b";
+    ctx.fill();
+    ctx.stroke();
+
+    // ember
+    ctx.beginPath();
+    ctx.arc(-w/2 + 3, 0, 5, 0, Math.PI * 2);
+    ctx.fillStyle = "#ff4d2e";
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  function drawBottleColumn(x, y, w, h, flipped) {
+    if (!bottleImg.complete || bottleImg.naturalWidth === 0) {
+      ctx.fillStyle = "rgba(0,0,0,.2)";
+      ctx.fillRect(x, y, w, h);
+      return;
+    }
+
+    // clip to the column area
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
+
+    // subtle column shadow
+    ctx.globalAlpha = 0.12;
+    ctx.fillStyle = "#000";
+    ctx.fillRect(x + 4, y + 6, w, h);
+    ctx.globalAlpha = 1;
+
+    const scale = w / bottleImg.naturalWidth;
+    const bottleH = bottleImg.naturalHeight * scale;
+
+    if (flipped) {
+      ctx.translate(0, y * 2 + h);
+      ctx.scale(1, -1);
+    }
+
+    const step = bottleH * TILE_OVERLAP;
+    let yy = y + h - bottleH;
+
+    const maxTiles = Math.ceil(h / step) + 3;
+    for (let i = 0; i < maxTiles; i++) {
+      ctx.drawImage(bottleImg, x, yy, w, bottleH);
+      yy -= step;
+    }
+
+    ctx.restore();
+  }
+
+  function drawRobert() {
+    const tilt = Math.max(-0.35, Math.min(0.45, robert.vy / 10));
+    ctx.save();
+    ctx.translate(robert.x, robert.y);
+    ctx.rotate(tilt);
+    ctx.drawImage(robertImg, -SPRITE_W/2, -SPRITE_H*0.55, SPRITE_W, SPRITE_H);
+    ctx.restore();
+  }
+
+  function drawGround() {
+    ctx.fillStyle = "#3dbb6b";
+    ctx.fillRect(0, canvas.height - FLOOR_H, canvas.width, FLOOR_H);
+    ctx.fillStyle = "rgba(0,0,0,.08)";
+    ctx.fillRect(0, canvas.height - FLOOR_H, canvas.width, 6);
+  }
+
+  function drawObstacles() {
+    const floorTop = canvas.height - FLOOR_H;
+    for (const o of obstacles) {
+      drawBottleColumn(o.x, 0, BOTTLE_W, o.gapY, o.flipTop);
+      const bottomY = o.gapY + o.gapH;
+      const bottomH = floorTop - bottomY;
+      drawBottleColumn(o.x, bottomY, BOTTLE_W, bottomH, false);
+    }
+  }
+
+  function drawCigs() {
+    for (const c of cigs) {
+      if (c.collected) continue;
+      drawCig(c.x, c.y, c.spin);
+    }
+  }
+
+  // ---------- Bonus slot scene ----------
+  function drawSlotMachineScene() {
+    // dim overlay
+    ctx.fillStyle = "rgba(0,0,0,.55)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // floor
+    ctx.fillStyle = "rgba(255,255,255,.08)";
+    ctx.fillRect(0, canvas.height - 120, canvas.width, 120);
+
+    // slot machine body
+    const sx = canvas.width * 0.60;
+    const sy = canvas.height * 0.36;
+    const sw = 150;
+    const sh = 220;
+
+    // machine outer
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,.6)";
+    ctx.shadowBlur = 18;
+    ctx.fillStyle = "#b23b3b";
+    roundRectPath(sx - sw/2, sy - sh/2, sw, sh, 18);
+    ctx.fill();
+    ctx.restore();
+
+    // screen
+    ctx.fillStyle = "#111";
+    roundRectPath(sx - 52, sy - 60, 104, 70, 10);
+    ctx.fill();
+
+    // reels text
+    ctx.fillStyle = "#f5e7a3";
+    ctx.font = "900 20px system-ui";
+    ctx.textAlign = "center";
+
+    let reelsText = "???";
+    if (bonusPhase === "ready") reelsText = "???";
+    if (bonusPhase === "pulled") reelsText = (bonusTimer % 6 < 3) ? "7 7 7" : "BAR";
+    if (bonusPhase === "drop") reelsText = "50!";
+
+    ctx.fillText(reelsText, sx, sy - 20);
+
+    // lever
+    ctx.strokeStyle = "#f2f2f2";
+    ctx.lineWidth = 8;
+    ctx.beginPath();
+    ctx.moveTo(sx + sw/2 - 15, sy - 40);
+    ctx.lineTo(sx + sw/2 + 20, sy + 20);
+    ctx.stroke();
+
+    // knob
+    ctx.fillStyle = "#f2f2f2";
+    ctx.beginPath();
+    ctx.arc(sx + sw/2 + 20, sy + 20, 14, 0, Math.PI*2);
+    ctx.fill();
+
+    // Robert stands to the left of it (fake “goes to slot machine”)
+    const rx = canvas.width * 0.30;
+    const ry = canvas.height * 0.55;
+    ctx.save();
+    ctx.translate(rx, ry);
+    ctx.rotate(-0.06);
+    ctx.drawImage(robertImg, -SPRITE_W/2, -SPRITE_H*0.55, SPRITE_W, SPRITE_H);
+    ctx.restore();
+
+    // Instructions
+    ctx.fillStyle = "#fff";
+    ctx.font = "900 22px system-ui";
+    ctx.fillText("SECRET SLOT!", canvas.width/2, 90);
+
+    ctx.font = "600 14px system-ui";
+    if (bonusPhase === "ready") {
+      ctx.fillText("Press SPACE to pull the lever", canvas.width/2, 120);
+    } else if (bonusPhase === "pulled") {
+      ctx.fillText("Spinning...", canvas.width/2, 120);
+    } else {
+      ctx.fillText("+50 points! Dropping you back in...", canvas.width/2, 120);
+    }
+
+    ctx.textAlign = "left";
+  }
+
+  // ---------- Update loop ----------
+  function updatePlay() {
+    frame++;
+
+    if (frame % SPAWN_EVERY === 0) spawnBottlePair();
+
+    robert.vy += GRAVITY;
+    if (robert.vy > MAX_FALL) robert.vy = MAX_FALL;
+    robert.y += robert.vy;
+
+    const floorY = canvas.height - FLOOR_H - ROBERT_RADIUS;
+    if (robert.y > floorY) { robert.y = floorY; endGame(); return; }
+
+    // ceiling clamp + EASTER EGG CHECK
+    if (robert.y < ROBERT_RADIUS) {
+      robert.y = ROBERT_RADIUS;
+      robert.vy = 0;
+
+      // Easter egg: only early in the run, only once
+      if (!eggUsedThisRun && frame <= EGG_WINDOW_FRAMES) {
+        enterBonusMode();
+        return;
+      }
+    }
+
+    const floorTop = canvas.height - FLOOR_H;
+
+    for (const o of obstacles) {
+      o.x -= SCROLL_SPEED;
+
+      if (!o.passed && o.x + BOTTLE_W < robert.x) {
+        o.passed = true;
+        score++;
+      }
+
+      const hitTop = circleRect(robert.x, robert.y, ROBERT_RADIUS, o.x, 0, BOTTLE_W, o.gapY);
+      const bottomY = o.gapY + o.gapH;
+      const bottomH = floorTop - bottomY;
+      const hitBottom = circleRect(robert.x, robert.y, ROBERT_RADIUS, o.x, bottomY, BOTTLE_W, bottomH);
+
+      if (hitTop || hitBottom) { endGame(); return; }
+    }
+
+    for (const c of cigs) {
+      if (c.collected) continue;
+      c.x -= SCROLL_SPEED;
+      c.spin += 0.08;
+
+      if (circleCircle(robert.x, robert.y, ROBERT_RADIUS, c.x, c.y, CIG_RADIUS)) {
+        c.collected = true;
+        score += CIG_POINTS;
+      }
+    }
+
+    while (obstacles.length && obstacles[0].x + BOTTLE_W < -180) obstacles.shift();
+    while (cigs.length && (cigs[0].x < -220 || cigs[0].collected)) cigs.shift();
+  }
+
+  function updateBonus() {
+    // no physics / no scrolling here — it’s a mini cutscene
+    if (bonusPhase === "pulled") {
+      bonusTimer--;
+      if (bonusTimer <= 0) {
+        // award points, show result briefly, then drop back
+        score += BONUS_POINTS;
+        bonusPhase = "drop";
+        bonusTimer = 55;
+      }
+    } else if (bonusPhase === "drop") {
+      bonusTimer--;
+      if (bonusTimer <= 0) {
+        exitBonusModeDropBack();
+      }
+    }
+  }
+
+  // ---------- Render ----------
+  function drawHUD() {
+    ctx.fillStyle = "rgba(0,0,0,.6)";
+    ctx.font = "700 22px system-ui";
+    ctx.textAlign = "left";
+    ctx.fillText(`Score: ${score}`, 16, 32);
+    ctx.font = "600 14px system-ui";
+    ctx.fillText(`Best: ${best}`, 16, 52);
+    ctx.fillText(`Cigs: +${CIG_POINTS}`, 16, 72);
+  }
+
+  function renderPlay() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawGround();
+    drawObstacles();
+    drawCigs();
+    drawRobert();
+    drawHUD();
+  }
+
+  function renderMenu() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawGround();
+
+    ctx.fillStyle = "rgba(0,0,0,.55)";
+    ctx.font = "900 22px system-ui";
+    ctx.textAlign = "center";
+    ctx.fillText("Robert Belly Bounce", canvas.width/2, canvas.height/2 - 24);
+
+    ctx.font = "600 14px system-ui";
+    ctx.fillText("Press SPACE to start", canvas.width/2, canvas.height/2 + 6);
+    ctx.fillText("Secret bonus: hit the ceiling early 😏", canvas.width/2, canvas.height/2 + 28);
+
+    ctx.textAlign = "left";
+  }
+
+  function renderGameOver() {
+    renderPlay();
+
+    ctx.fillStyle = "rgba(0,0,0,.55)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = "#fff";
+    ctx.font = "900 28px system-ui";
+    ctx.textAlign = "center";
+    ctx.fillText("BOTTLED 😵‍💫", canvas.width/2, canvas.height/2 - 24);
+
+    ctx.font = "700 16px system-ui";
+    ctx.fillText(`Score: ${score}`, canvas.width/2, canvas.height/2 + 6);
+
+    ctx.font = "600 14px system-ui";
+    ctx.fillText("Press SPACE to retry", canvas.width/2, canvas.height/2 + 32);
+
+    ctx.textAlign = "left";
+  }
+
+  function loop() {
+    if (state === "play") updatePlay();
+    else if (state === "bonus") updateBonus();
+
+    if (state === "menu") renderMenu();
+    else if (state === "play") renderPlay();
+    else if (state === "bonus") {
+      // keep background subtle + show slot scene
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawSlotMachineScene();
+      drawHUD();
+    }
+    else if (state === "gameover") renderGameOver();
+
+    requestAnimationFrame(loop);
+  }
+
+  // start at menu
+  state = "menu";
+  loop();
+})();
+</script>
+</body>
+</html>
