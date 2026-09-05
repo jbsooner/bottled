@@ -807,15 +807,15 @@
 
   // ---------- Render ----------
   function drawHUD() {
-    ctx.fillStyle="#12100ed9";ctx.fillRect(0,0,W,72);
-    ctx.fillStyle="#b7352d";ctx.fillRect(0,70,W,2);
-    ctx.fillStyle="#a99f8e";ctx.font="11px Arial";ctx.textAlign="left";ctx.fillText("SCORE",18,23);
-    ctx.fillStyle="#f1e5ce";ctx.font="bold 28px Georgia";ctx.fillText(String(score).padStart(2,"0"),18,53);
-    ctx.fillStyle="#a99f8e";ctx.font="11px Arial";ctx.textAlign="center";ctx.fillText(combo>1?`STREAK ×${combo}`:"STAGE",W/2,23);
-    ctx.fillStyle=combo>1?"#f0bd55":"#f1e5ce";ctx.font="bold 20px Georgia";ctx.fillText(combo>1?`+${Math.min(combo,5)}`:String(1+Math.floor(gates/10)),W/2,51);
-    ctx.textAlign="right";ctx.fillStyle="#a99f8e";ctx.font="11px Arial";ctx.fillText("LUCK",W-18,23);
-    for(let i=0;i<4;i++){ctx.fillStyle=i<shieldCharge?"#d3a44b":"#554d43";ctx.fillRect(W-92+i*19,39,14,6);}
-    if(toastLife>0) {ctx.textAlign="center";ctx.fillStyle="#fff0ca";ctx.font="bold 14px Arial";ctx.fillText(toast,W/2,105);}
+    ctx.fillStyle="#0f1b30c7";roundRectPath(16,16,W-32,66,14);ctx.fill();
+    ctx.strokeStyle="#e8be7433";ctx.lineWidth=1;roundRectPath(16,16,W-32,66,14);ctx.stroke();
+    ctx.fillStyle="#a8b4c8";ctx.font="10px Arial";ctx.textAlign="left";ctx.fillText("SCORE",30,36);
+    ctx.fillStyle="#fff1d3";ctx.font="bold 27px Georgia";ctx.fillText(String(score).padStart(2,"0"),28,64);
+    ctx.fillStyle="#a8b4c8";ctx.font="10px Arial";ctx.textAlign="center";ctx.fillText(combo>1?`STREAK ×${combo}`:"STAGE",W/2,36);
+    ctx.fillStyle=combo>1?"#efc27e":"#f2e8d9";ctx.font="bold 20px Georgia";ctx.fillText(combo>1?`+${Math.min(combo,5)}`:String(1+Math.floor(gates/10)).padStart(2,"0"),W/2,62);
+    ctx.textAlign="right";ctx.fillStyle="#a8b4c8";ctx.font="10px Arial";ctx.fillText("LUCK",W-30,36);
+    for(let i=0;i<4;i++){ctx.fillStyle=i<shieldCharge?"#efc27e":"#40516a";ctx.fillRect(W-99+i*18,52,13,5);}
+    if(toastLife>0) {ctx.textAlign="center";ctx.fillStyle="#ffe3a0";ctx.font="bold 14px Arial";ctx.fillText(toast,W/2,111);}
     ctx.textAlign="left";
   }
 
@@ -837,14 +837,15 @@
   }
 
   function panel(kicker,title,subtitle,action) {
-    ctx.fillStyle="#14110ee8";ctx.fillRect(28,185,W-56,264);
-    ctx.fillStyle="#b7352d";ctx.fillRect(28,185,6,264);
-    ctx.textAlign="left";ctx.fillStyle="#c9ad75";ctx.font="bold 12px Arial";ctx.fillText(kicker,55,220);
-    ctx.fillStyle="#f1e5ce";ctx.font="bold 43px Georgia";ctx.fillText(title,55,274);
-    ctx.fillStyle="#aca18f";ctx.font="14px Arial";ctx.fillText(subtitle,55,307);
-    ctx.fillStyle="#b7352d";ctx.fillRect(55,340,310,52);
-    ctx.fillStyle="#fff3da";ctx.font="bold 15px Arial";ctx.textAlign="center";ctx.fillText(action,W/2,372);
-    ctx.fillStyle="#8d8373";ctx.font="12px Arial";ctx.fillText("Space, tap, or click",W/2,421);ctx.textAlign="left";
+    ctx.fillStyle="#0b152978";ctx.fillRect(0,0,W,H-FLOOR_H);
+    ctx.fillStyle="#111f34ed";roundRectPath(30,178,W-60,284,22);ctx.fill();
+    ctx.strokeStyle="#e8be7440";ctx.lineWidth=1;roundRectPath(30,178,W-60,284,22);ctx.stroke();
+    ctx.textAlign="center";ctx.fillStyle="#eac58d";ctx.font="bold 11px Arial";ctx.fillText(kicker,W/2,214);
+    ctx.fillStyle="#fff2d9";ctx.font="bold 43px Georgia";ctx.fillText(title,W/2,269);
+    ctx.fillStyle="#aebbcd";ctx.font="13px Arial";ctx.fillText(subtitle,W/2,302);
+    ctx.fillStyle="#efbe76";roundRectPath(59,330,W-118,52,11);ctx.fill();
+    ctx.fillStyle="#182336";ctx.font="bold 14px Arial";ctx.fillText(action,W/2,362);
+    ctx.fillStyle="#8192ac";ctx.font="12px Arial";ctx.fillText("Space, tap, or click",W/2,419);ctx.textAlign="left";
   }
   function renderMenu() {
     drawBackground();drawGround();
