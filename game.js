@@ -84,10 +84,111 @@
   let best = 0;
   let frame = 0;
   let shake = 0;
-  let gates = 0, combo = 0, collected = 0, lastGap = 250, scenery = 0, toast = "", toastLife = 0;
+  let gates = 0, combo = 0, collected = 0, perfects = 0, lastGap = 250, scenery = 0, toast = "", toastLife = 0;
+  let shieldCharge = 0;
+  let gameMode = "classic";
+  let dailyRandState = 1;
   let pausedFrom = "play";
 
   try { best = Math.max(0, Number(localStorage.getItem("rbb_best")) || 0); } catch {}
+
+  function dateKey(date = new Date()) {
+    return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;
+  }
+
+  function seedForDate(key) {
+    let hash = 2166136261;
+    for (const char of key) { hash ^= char.charCodeAt(0); hash = Math.imul(hash, 16777619); }
+    return hash >>> 0;
+  }
+
+  const today = dateKey();
+  const dailySeed = seedForDate(today);
+  const missionDefs = [
+    { type:"gates", target:8 + dailySeed%5, reward:2, verb:"Pass", noun:"bottles" },
+    { type:"perfects", target:3 + (dailySeed>>>4)%3, reward:3, verb:"Hit", noun:"perfects" },
+    { type:"collected", target:2 + (dailySeed>>>8)%3, reward:2, verb:"Collect", noun:"cigs" }
+  ];
+  let meta = { caps:0, completedDate:today, completed:[false,false,false], progress:[0,0,0], lastDailyDate:"", streak:0, dailyDate:today, dailyBest:0, trail:"smoke" };
+  try {
+    const saved = JSON.parse(localStorage.getItem("rbb_meta_v2") || "null");
+    if (saved) meta = { ...meta, ...saved };
+  } catch {}
+  if (meta.completedDate !== today) { meta.completedDate = today; meta.completed = [false,false,false]; meta.progress = [0,0,0]; }
+  if (!Array.isArray(meta.progress)) meta.progress = [0,0,0];
+  if (meta.dailyDate !== today) { meta.dailyDate = today; meta.dailyBest = 0; }
+
+  function saveMeta() {
+    try { localStorage.setItem("rbb_meta_v2", JSON.stringify(meta)); } catch {}
+  }
+
+  function trailColor() {
+    if (meta.trail === "ember") return "rgba(255,116,55,.9)";
+    if (meta.trail === "neon") return "rgba(52,236,213,.9)";
+    return "rgba(225,231,229,.82)";
+  }
+
+  function syncMetaUI() {
+    document.getElementById("page-best").textContent = best;
+    document.getElementById("daily-streak").textContent = meta.streak;
+    document.getElementById("cap-count").textContent = meta.caps;
+    document.getElementById("board-date").textContent = new Date().toLocaleDateString(undefined,{weekday:"long",month:"short",day:"numeric"});
+    document.getElementById("run-label").textContent = gameMode === "daily" ? `Daily best ${meta.dailyBest}` : "Endless";
+    document.getElementById("mode-classic").className = gameMode === "classic" ? "active" : "";
+    document.getElementById("mode-daily").className = gameMode === "daily" ? "active" : "";
+    document.getElementById("mode-classic").setAttribute?.("aria-pressed", gameMode === "classic");
+    document.getElementById("mode-daily").setAttribute?.("aria-pressed", gameMode === "daily");
+    missionDefs.forEach((mission,index) => {
+      const value = Math.min(meta.progress[index], mission.target);
+      document.getElementById(`mission-${index}-name`).textContent = `${mission.verb} ${mission.target} ${mission.noun}`;
+      document.getElementById(`mission-${index}-progress`).textContent = meta.completed[index] ? "Complete" : `${value} / ${mission.target}`;
+      document.getElementById(`mission-${index}`).className = meta.completed[index] ? "mission complete" : "mission";
+    });
+    const trails = [{id:"smoke",cost:0},{id:"ember",cost:4},{id:"neon",cost:8}];
+    trails.forEach(({id,cost}) => {
+      const unlocked = meta.caps >= cost;
+      document.getElementById(`trail-${id}`).className = `${meta.trail===id?"selected ":""}${unlocked?"":"locked"}`.trim();
+      document.getElementById(`trail-${id}`).setAttribute?.("aria-pressed", meta.trail === id);
+      document.getElementById(`trail-${id}`).setAttribute?.("aria-disabled", !unlocked);
+    });
+    document.getElementById("shield-pips").innerHTML = Array.from({length:4},(_,i)=>`<i class="${i<shieldCharge?"filled":""}"></i>`).join("");
+  }
+
+  function checkGoals() {
+    let earned = 0;
+    missionDefs.forEach((mission,index) => {
+      if (!meta.completed[index] && meta.progress[index] >= mission.target) {
+        meta.completed[index] = true;
+        meta.caps += mission.reward;
+        earned += mission.reward;
+      }
+    });
+    if (earned) { toast = `GOAL CLEARED  +${earned} CAPS`; toastLife = 120; }
+    saveMeta();
+    syncMetaUI();
+  }
+
+  function recordDailyVisit() {
+    if (meta.lastDailyDate === today) return;
+    const yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1);
+    meta.streak = meta.lastDailyDate === dateKey(yesterday) ? meta.streak + 1 : 1;
+    meta.lastDailyDate = today;
+    saveMeta();
+  }
+
+  function selectMode(next) {
+    if (state === "play" || state === "bonus" || state === "paused") return;
+    gameMode = next;
+    try { localStorage.setItem("rbb_mode", gameMode); } catch {}
+    syncMetaUI();
+  }
+
+  function selectTrail(id,cost) {
+    if (meta.caps < cost) { toast = `NEED ${cost-meta.caps} MORE CAPS`; toastLife = 90; return; }
+    meta.trail = id; saveMeta(); syncMetaUI();
+  }
+
+  try { gameMode = localStorage.getItem("rbb_mode") === "daily" ? "daily" : "classic"; } catch {}
 
   const robert = { x: 140, y: H * 0.4, vy: 0, squash: 0 };
 
@@ -117,6 +218,14 @@
   function rand(min, max) { return Math.random() * (max - min) + min; }
   function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 
+  function runRandom() {
+    if (gameMode !== "daily") return Math.random();
+    dailyRandState = (Math.imul(dailyRandState,1664525) + 1013904223) >>> 0;
+    return dailyRandState / 4294967296;
+  }
+
+  function runRand(min,max) { return min + runRandom() * (max-min); }
+
   function currentSpeed() {
     return BASE_SCROLL + Math.min(1.5, gates * 0.045);
   }
@@ -126,10 +235,12 @@
   }
 
   function startFreshRun() {
+    if (gameMode === "daily") recordDailyVisit();
     state = "play";
     document.getElementById("pause").textContent = "Pause";
     score = 0;
-    sceneBlend = 1; gates = 0; combo = 0; collected = 0; lastGap = 250; toastLife = 0;
+    sceneBlend = 1; gates = 0; combo = 0; collected = 0; perfects = 0; shieldCharge = 0; lastGap = 250; toastLife = 0;
+    dailyRandState = dailySeed;
     frame = 0;
     shake = 0;
 
@@ -145,6 +256,7 @@
     eggUsedThisRun = false;
     bonusPhase = "ready";
     bonusTimer = 0;
+    syncMetaUI();
   }
 
   function spawnBottlePair() {
@@ -152,7 +264,7 @@
     const margin = 70;
 
     const gapH = currentGap();
-    const center = clamp(lastGap + rand(-85, 85), margin + gapH/2, floorTop - margin - gapH/2);
+    const center = clamp(lastGap + runRand(-85, 85), margin + gapH/2, floorTop - margin - gapH/2);
     lastGap = center;
     const gapY = center - gapH/2;
     const x = W + 40;
@@ -160,10 +272,10 @@
     const flipTop = true;
     obstacles.push({ x, gapY, gapH, passed:false, flipTop });
 
-    if (Math.random() < CIG_SPAWN_CHANCE) {
+    if (runRandom() < CIG_SPAWN_CHANCE) {
       const cy = gapY + gapH * 0.5;
       const cx = x + BOTTLE_W / 2;
-      cigs.push({ x: cx, y: cy, collected:false, spin: Math.random() * 6 });
+      cigs.push({ x: cx, y: cy, collected:false, spin: runRandom() * 6 });
     }
   }
 
@@ -189,6 +301,8 @@
     state = "gameover";
     best = Math.max(best, score);
     try { localStorage.setItem("rbb_best", String(best)); } catch {}
+    if (gameMode === "daily" && score > meta.dailyBest) { meta.dailyBest = score; saveMeta(); }
+    syncMetaUI();
   }
 
   function enterBonusMode() {
@@ -243,7 +357,7 @@
       startFreshRun();
       robert.vy = FLAP_VY;
       robert.squash = 0.35;
-      spawnPuff(robert.x - 22, robert.y + 6, 6, "rgba(255,255,255,.9)");
+      spawnPuff(robert.x - 22, robert.y + 6, 6, trailColor());
       return;
     }
 
@@ -251,7 +365,7 @@
       startFreshRun();
       robert.vy = FLAP_VY;
       robert.squash = 0.35;
-      spawnPuff(robert.x - 22, robert.y + 6, 6, "rgba(255,255,255,.9)");
+      spawnPuff(robert.x - 22, robert.y + 6, 6, trailColor());
       return;
     }
 
@@ -266,7 +380,7 @@
     if (state === "play") {
       robert.vy = FLAP_VY;
       robert.squash = 0.35;
-      spawnPuff(robert.x - 22, robert.y + 6, 6, "rgba(255,255,255,.9)");
+      spawnPuff(robert.x - 22, robert.y + 6, 6, trailColor());
     }
   }
 
@@ -289,8 +403,14 @@
   document.getElementById("pause").addEventListener("click", togglePause);
   function syncSound() { document.getElementById("sound").textContent = muted ? "Sound off" : "Sound on"; }
   document.getElementById("sound").addEventListener("click", () => { setMuted(!muted); syncSound(); });
+  document.getElementById("mode-classic").addEventListener("click", () => selectMode("classic"));
+  document.getElementById("mode-daily").addEventListener("click", () => selectMode("daily"));
+  document.getElementById("trail-smoke").addEventListener("click", () => selectTrail("smoke",0));
+  document.getElementById("trail-ember").addEventListener("click", () => selectTrail("ember",4));
+  document.getElementById("trail-neon").addEventListener("click", () => selectTrail("neon",8));
   document.addEventListener("visibilitychange", () => { if (document.hidden && (state === "play" || state === "bonus")) togglePause(); });
   syncSound();
+  syncMetaUI();
 
   // ---------- Drawing helpers ----------
   function roundRectPath(x, y, w, h, r) {
@@ -589,12 +709,15 @@
       if (!o.passed && o.x + BOTTLE_W < robert.x) {
         o.passed = true;
         score++; gates++;
+        meta.progress[0]++;
         if(gates%10===0)sceneBlend=0;
         if (Math.abs(robert.y - (o.gapY + o.gapH/2)) < 34) {
-          combo++; const reward = Math.min(combo, 5); score += reward;
+          combo++; perfects++; const reward = Math.min(combo, 5); score += reward;
+          meta.progress[1]++;
           toast = `PERFECT ×${Math.min(combo,5)}  +${reward}`; toastLife = 75;
           spawnPop(robert.x,robert.y,"#ffe3a0");
         } else combo = 0;
+        checkGoals();
       }
 
       const hitTop = bottleHit(robert.x, robert.y, ROBERT_RADIUS, o.x, 0, BOTTLE_W, o.gapY, true);
@@ -604,9 +727,19 @@
 
       if (hitTop || hitBottom) {
         shake = 12;
-        spawnPop(robert.x, robert.y, "rgba(255,107,107,.9)");
-        endGame();
-        return;
+        if (shieldCharge >= 4) {
+          shieldCharge = 0;
+          o.x = -BOTTLE_W - 1;
+          robert.vy = FLAP_VY * .55;
+          toast = "LUCKY BREAK"; toastLife = 100;
+          spawnPop(robert.x, robert.y, "#e8bd63");
+          syncMetaUI();
+          continue;
+        } else {
+          spawnPop(robert.x, robert.y, "rgba(255,107,107,.9)");
+          endGame();
+          return;
+        }
       }
     }
 
@@ -617,8 +750,11 @@
 
       if (circleCircle(robert.x, robert.y, ROBERT_RADIUS, c.x, c.y, CIG_RADIUS)) {
         c.collected = true;
-        score += CIG_POINTS; collected++; toast = "+5 · NICE CATCH"; toastLife = 60;
+        score += CIG_POINTS; collected++; shieldCharge = Math.min(4,shieldCharge+1);
+        meta.progress[2]++;
+        toast = shieldCharge === 4 ? "LUCKY BREAK READY" : "+5 · NICE CATCH"; toastLife = 60;
         spawnPop(c.x, c.y, "rgba(255,204,77,.9)");
+        checkGoals();
       }
     }
 
@@ -671,14 +807,15 @@
 
   // ---------- Render ----------
   function drawHUD() {
-    ctx.fillStyle="#0f1b30bb";roundRectPath(16,16,W-32,64,14);ctx.fill();
-    ctx.fillStyle="#a8b4c8";ctx.font="9px system-ui";ctx.textAlign="left";ctx.fillText("SCORE",30,35);
-    ctx.fillStyle="#fff1d3";ctx.font="bold 27px system-ui";ctx.fillText(String(score).padStart(2,"0"),28,63);
-    ctx.fillStyle="#a8b4c8";ctx.font="9px system-ui";ctx.textAlign="center";ctx.fillText("PERSONAL BEST",W/2,35);
-    ctx.fillStyle="#efc27e";ctx.font="bold 20px system-ui";ctx.fillText(String(best),W/2,61);
-    ctx.textAlign="right";ctx.fillStyle="#a8b4c8";ctx.font="9px system-ui";ctx.fillText("STAGE",W-30,35);
-    ctx.fillStyle="#f2e8d9";ctx.font="bold 20px system-ui";ctx.fillText(String(1+Math.floor(gates/10)).padStart(2,"0"),W-30,61);
-    if(toastLife>0) {ctx.textAlign="center";ctx.fillStyle="#ffe3a0";ctx.font="bold 15px system-ui";ctx.fillText(toast,W/2,115);}
+    ctx.fillStyle="#12100ed9";ctx.fillRect(0,0,W,72);
+    ctx.fillStyle="#b7352d";ctx.fillRect(0,70,W,2);
+    ctx.fillStyle="#a99f8e";ctx.font="11px Arial";ctx.textAlign="left";ctx.fillText("SCORE",18,23);
+    ctx.fillStyle="#f1e5ce";ctx.font="bold 28px Georgia";ctx.fillText(String(score).padStart(2,"0"),18,53);
+    ctx.fillStyle="#a99f8e";ctx.font="11px Arial";ctx.textAlign="center";ctx.fillText(combo>1?`STREAK ×${combo}`:"STAGE",W/2,23);
+    ctx.fillStyle=combo>1?"#f0bd55":"#f1e5ce";ctx.font="bold 20px Georgia";ctx.fillText(combo>1?`+${Math.min(combo,5)}`:String(1+Math.floor(gates/10)),W/2,51);
+    ctx.textAlign="right";ctx.fillStyle="#a99f8e";ctx.font="11px Arial";ctx.fillText("LUCK",W-18,23);
+    for(let i=0;i<4;i++){ctx.fillStyle=i<shieldCharge?"#d3a44b":"#554d43";ctx.fillRect(W-92+i*19,39,14,6);}
+    if(toastLife>0) {ctx.textAlign="center";ctx.fillStyle="#fff0ca";ctx.font="bold 14px Arial";ctx.fillText(toast,W/2,105);}
     ctx.textAlign="left";
   }
 
@@ -692,24 +829,31 @@
     drawHUD();
   }
 
-  function panel(title, subtitle, action) {
-    ctx.fillStyle="#0b15297d";ctx.fillRect(0,0,W,H-FLOOR_H);
-    ctx.fillStyle="#111f34ed";roundRectPath(30,178,W-60,292,22);ctx.fill();
-    ctx.strokeStyle="#e8be743d";ctx.lineWidth=1;ctx.stroke();
-    ctx.textAlign="center";ctx.fillStyle="#eac58d";ctx.font="bold 10px system-ui";ctx.fillText("ONE MORE RUN?",W/2,210);
-    ctx.fillStyle="#fff2d9";ctx.font="bold 44px Georgia";ctx.fillText(title,W/2,261);
-    ctx.fillStyle="#aebbcd";ctx.font="13px system-ui";ctx.fillText(subtitle,W/2,294);
-    ctx.fillStyle="#efbe76";roundRectPath(60,324,W-120,49,12);ctx.fill();
-    ctx.fillStyle="#182336";ctx.font="bold 14px system-ui";ctx.fillText(action,W/2,354);
-    ctx.fillStyle="#d4dbea";ctx.font="12px system-ui";ctx.fillText("Space, click, or tap to bounce",W/2,404);
-    ctx.fillStyle="#8192ac";ctx.font="11px system-ui";ctx.fillText("Find the center. Build your perfect streak.",W/2,432);ctx.textAlign="left";
+  function runMedal() {
+    if (score >= 60) return "Gold";
+    if (score >= 30) return "Silver";
+    if (score >= 12) return "Bronze";
+    return "No medal";
+  }
+
+  function panel(kicker,title,subtitle,action) {
+    ctx.fillStyle="#14110ee8";ctx.fillRect(28,185,W-56,264);
+    ctx.fillStyle="#b7352d";ctx.fillRect(28,185,6,264);
+    ctx.textAlign="left";ctx.fillStyle="#c9ad75";ctx.font="bold 12px Arial";ctx.fillText(kicker,55,220);
+    ctx.fillStyle="#f1e5ce";ctx.font="bold 43px Georgia";ctx.fillText(title,55,274);
+    ctx.fillStyle="#aca18f";ctx.font="14px Arial";ctx.fillText(subtitle,55,307);
+    ctx.fillStyle="#b7352d";ctx.fillRect(55,340,310,52);
+    ctx.fillStyle="#fff3da";ctx.font="bold 15px Arial";ctx.textAlign="center";ctx.fillText(action,W/2,372);
+    ctx.fillStyle="#8d8373";ctx.font="12px Arial";ctx.fillText("Space, tap, or click",W/2,421);ctx.textAlign="left";
   }
   function renderMenu() {
-    drawBackground();drawGround();panel("Bottled.","A little lift. A lot of bad decisions.","LET’S BOUNCE  →");
+    drawBackground();drawGround();
+    const detail=gameMode==="daily"?`Same course for everyone · Best ${meta.dailyBest}`:`Endless run · Best ${best}`;
+    panel(gameMode==="daily"?"TODAY’S RUN":"CLASSIC RUN","Bottled",detail,"START RUN");
     drawRobertSprite(W/2,120+Math.sin(scenery*.04)*4,60,105);
   }
   function renderGameOver() {
-    renderPlay();panel("Bottled!",`${score} points  ·  ${gates} gates  ·  ${collected} catches`,"ANOTHER ROUND  ↻");
+    renderPlay();panel(runMedal().toUpperCase(),`${score} points`,`${gates} gates · ${perfects} perfect · ${collected} caught`,"RUN IT BACK");
   }
   let previousTime = 0, accumulator = 0;
   function loop(now = 0) {
